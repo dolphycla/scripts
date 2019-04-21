@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # cf-failver.sh - https://github.com/dolphycla/scripts
 # A minimal, portable failover client for CloudFlare API v4 meant for use with icinga2
 # Requires: curl (w/ HTTPS support), grep, awk
@@ -9,25 +9,25 @@ Usage: cf-failover.sh [OPTION] -e=EMAIL -a=APIKEY -z=ZONENAME -r=RECORDNAME
 A minimal, portable DDNS client for CloudFlare
 
 Required
-  -e=, --email=		CloudFlare account email
-  -a=, --apikey=	CloudFlare account API key
-  -z=, --zonename=	Zone name in the form of subdomain.domain.tld
+  -e , --email=    CloudFlare account email
+  -a , --apikey=  CloudFlare account API key
+  -z , --zonename=  Zone name in the form of subdomain.domain.tld
+  -p , --record_name Record name
     OR
-  -y=, --zoneid=	CloudFlare zone ID
-  -r=, --recordname=	Record name in the form of subdomain.domain.tld
+  -y , --state=  Service State
+  -r , --state_type=  Service State type
     OR
-  -q=, --recordid=	CloudFlare record ID
-
+  -q , --check_attempt=  Service check attempt
+  -l , --recordid=    CloudFlare record ID
 Options
-  -f, --force		Force a DNS update, even if FailOver IP hasn't changed
-  -t, --test		Test action without updating DNS record
-  -f=, --failover=		Manually specify FailOver IP address, skip detection
-  --get-zone-id		Print zone ID corresponding to zone name and exit
-  --get-record-id	Print record ID corresponding to record name and exit
-  -h, --help		Print this message and exit
+  -f, --force    Force a DNS update, even if FailOver IP hasn't changed
+  -t, --test    Test action without updating DNS record
+  -f , --failover=    Manually specify FailOver IP address, skip detection
+  -h, --help    Print this message and exit
 ENDHELP`
 
-
+cf_log='/tmp/cf_failover.log'
+timestamp=`date +"%m-%d-%Y %H:%S:%T"`
 #Configuration - these options can be hard-coded or passed as parameters
 ###############
 # CF credentials - required
@@ -49,8 +49,6 @@ record_id=''
 curl_command='curl'
 # FailOver address - DNS A record will be updated to point to this address
 FAILPOVER_addr=''
-# Where to store the address from our last update. /tmp/.
-storage_dir='/tmp/'
 # Force update if address hasn't changed?
 force=false
 # CloudFlare API (v4) URL
@@ -69,16 +67,19 @@ validate_ip_addr () {
     return 0
 }
 
+logs_output () {
 
+    echo "${timestamp} - ${1}"
+}
 
 set_FAILPOVER_addr () {
     if [ ! -z $1 ]; then
         if validate_ip_addr $1; then
-	    FAILPOVER_addr="${1}"
+      FAILPOVER_addr="${1}"
             return 0
         else
-            echo "FailOver IP is invalid."
-	    exit 1
+            logs_output "FailOver IP is invalid." >> ${cf_log}
+      exit 1
         fi
     fi
     return 1
@@ -87,9 +88,9 @@ set_FAILPOVER_addr () {
 
 get_zone_id () {
     if [ -z $zone_id ]; then
-	set_zone_id $zone_name
+  set_zone_id $zone_name
     fi
-    echo "${zone_id}"
+    logs_output "${zone_id}" >> ${cf_log}
     return 0
 }
 
@@ -105,24 +106,24 @@ lookup_zone_id () {
     fi
 
     if [ -z $zname ]; then
-        echo "No zone name provided."
+        logs_output "No zone name provided." >> ${cf_log}
         exit 1
     fi
 
     zones=`${curl_command} -s -X GET "${cf_api_url}/zones?name=${zname}" -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_api_key}" -H "Content-Type: application/json"`
 
     if [ ! "${zones}" ]; then
-        echo "Request to API failed during zone lookup."
+        logs_output "Request to API failed during zone lookup." >> ${cf_log}
         exit 1
     fi
 
     if [ -n "${zones##*\"success\":true*}" ]; then
-        echo "Failed to lookup zone ID. Check zone name or specify an ID."
-        echo "${zones}"
+        logs_output "Failed to lookup zone ID. Check zone name or specify an ID." >> ${cf_log}
+        logs_output "${zones}" >> ${cf_log}
         exit 1
     fi
 
-    echo "${zones}" | grep -Po '(?<="id":")[^"]*' | head -1
+    logs_output "${zones}" | grep -Po '(?<="id":")[^"]*' | head -1
     return 0
 }
 
@@ -130,18 +131,18 @@ lookup_zone_id () {
 set_zone_id () {
     if [ ! -z $1 ]; then
         if [ -n "${1##*\.*}"]; then
-	    zone_id=`lookup_zone_id "${1}"`
+      zone_id=`lookup_zone_id "${1}"`
             return 0
         else
             zone_id="${1}"
-	    return 0
+      return 0
         fi
     elif [ -n $zone_name ]; then
         set_zone_id $zone_name
-	return 0
+  return 0
     fi
     return 1
-}	
+}
 
 #TBD - refactor this like the get/set/lookup_zone_id functions
 get_record_id () {
@@ -149,12 +150,12 @@ get_record_id () {
     local records_count
 
     if [ -z $record_name ]; then
-        echo "No record name provided."
+        logs_output "No record name provided." >> ${cf_log}
         exit 1
     fi
 
     if [ -z $zone_name ] && [ -z $zone_id ]; then
-        echo "No zone name or ID provided."
+        logs_output "No zone name or ID provided." >> ${cf_log}
         exit 1
     fi
 
@@ -166,21 +167,21 @@ get_record_id () {
     records=`${curl_command} -s -X GET "${cf_api_url}/zones/${zone_id}/dns_records?name=${record_name}&type=A" -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_api_key}" -H "Content-Type: application/json"`
 
     if [ ! "${records}" ]; then
-        echo "Request to API failed during record lookup."
+        logs_output "Request to API failed during record lookup." >> ${cf_log}
         exit 1
     fi
 
     if [ -n "${records##*\"success\":true*}" ]; then
-        echo "Failed to lookup DNS record ID. Check record name or specify an ID."
-        echo "${records}"
+        logs_output "Failed to lookup DNS record ID. Check record name or specify an ID." >> ${cf_log}
+        logs_output "${records}" >> ${cf_log}
         exit 1
     fi
 
-    records=`echo "${records}" | grep -Po '(?<="id":")[^"]*'`
-    records_count=`echo "${records}" | wc -w`
+    records=`logs_output "${records}"| grep -Po '(?<="id":")[^"]*'`
+    records_count=`logs_output "${records}" | wc -w`
 
     if [ $records_count -gt 1 ]; then
-        echo "Multiple DNS A records match ${record_name}. Please specify a record ID."
+        logs_output "Multiple DNS A records match ${record_name}. Please specify a record ID." >> ${cf_log}
         exit 1
     fi
 
@@ -194,14 +195,14 @@ do_record_update () {
     api_dns_update=`${curl_command} -s -X PUT "${cf_api_url}/zones/${zone_id}/dns_records/${record_id}" -H "X-Auth-Email: ${cf_email}" -H "X-Auth-Key: ${cf_api_key}" -H "Content-Type: application/json" --data "{\"id\":\"${zone_id}\",\"type\":\"A\",\"name\":\"${record_name}\",\"content\":\"${FAILPOVER_addr}\"}"`
 
     if [ ! "${api_dns_update}" ]; then
-        echo "There was a problem communicating with the API server. Check your connectivity and parameters."
-        echo "${api_dns_update}"
+        logs_output "There was a problem communicating with the API server. Check your connectivity and parameters." >> ${cf_log}
+        logs_output "${api_dns_update}" >> ${cf_log}
         exit 1
     fi
 
     if [ -n "${api_dns_update##*\"success\":true*}" ]; then
-        echo "Record update failed."
-        echo "${api_dns_update}"
+        logs_output "Record update failed." >> ${cf_log}
+        logs_output "${api_dns_update}" >> ${cf_log}
         exit 1
     fi
 
@@ -214,70 +215,72 @@ do_record_update () {
 #Main
 ###############
 # Remove any trailing slashes from storage_dir and cf_api_url
-storage_dir=${storage_dir%%+(/)}
 cf_api_url=${cf_api_url%%+(/)}
 
 # Show help and exit if no option was passed in the command line
 
 if [ -z "${1}" ]; then
-    echo "${helptext}"
+    logs_output "${helptext}" >> ${cf_log}
     exit 0
 fi
 
 # Get options and arguments from the command line
-for key in "$@"; do
-    case $key in
-    -z=*|--zonename=*)
-        zone_name="${key#*=}"
-        shift
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+key="$1"
+
+case $key in
+    -z|--zonename)
+    zone_name="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -r=*|--recordname=*)
-        record_name="${key#*=}"
-        shift
+    -p|--recordname)
+    record_name="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -y=*|--zoneid=*)
-        set_zone_id "${key#*=}"
-        shift
+    -l|--recordid)
+    record_id="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -q=*|--recordid=*)
-        record_id="${key#*=}"
-        shift
+
+    -e|--cf_email)
+    cf_email="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -e=*|--email=*)
-        cf_email="${key#*=}"
-        shift
+    -a|--apikey)
+    cf_api_key="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -a=*|--apikey=*)
-        cf_api_key="${key#*=}"
-        shift
+    -f|--FailOver)
+    FAILPOVER_addr="$2"
+    shift # past argument
+    shift # past value
     ;;
-    -f=*|--FailOver=*)
-        set_FAILPOVER_addr "${key#*=}"
-        shift
+    --default)
+    DEFAULT=YES
+    shift # past argument
     ;;
-    -f|--force)
-        force=true
-        shift
+    *)    # unknown option
+    POSITIONAL+=("$1") # save it in an array for later
+    shift # past argument
     ;;
-    -t|--test)
-        run_mode="test"
-        shift
-    ;;
-    -h|--help)
-        echo "${helptext}"
-        exit 0
-    ;;
-    *)
-        echo "Unknown option '${key}'"
-        exit 1
-    ;;
-    esac
+esac
 done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+
+
 
 # Check if curl supports https
 curl_https_check=`${curl_command} --version`
 if [ -n "${curl_https_check##*https*}" ]; then
-    echo "Your version of curl doesn't support HTTPS. Exiting."
+    logs_output "Your version of curl doesn't support HTTPS. Exiting." >> ${cf_log}
     exit 1
 fi
 
@@ -291,15 +294,11 @@ if [ -z $record_id ]; then
 fi
 
 
-if [ "$run_mode" = "test" ]; then
-    echo "TEST:	In zone ${zone_name}[${zone_id}],"
-    echo "	update A record ${record_name}[${record_id}]"
-    echo "	to point to ${FAILPOVER_addr}"
-    exit 0
-fi
-
+logs_output "Record id: ${record_id}" >> ${cf_log}
+logs_output "Zone name: ${zone_name}" >> ${cf_log}
+logs_output "Zone id: ${zone_id}" >> ${cf_log}
 do_record_update
 
-echo "Record updated."
+logs_output "Record updated." >> ${cf_log}
 
 exit 0
